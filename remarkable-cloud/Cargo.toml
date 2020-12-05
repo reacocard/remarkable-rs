@@ -12,5 +12,5 @@ edition = "2018"
 clap = { version = "2.33" }
 directories = { version = "3.0" }
 reqwest = { version = "0.10", features = ["json"] }
-remarkable-cloud-api = { path = '../remarkable-cloud-api' }
+remarkable-cloud-api = { version = "0.1", path = '../remarkable-cloud-api' }
 tokio = { version = "0.2", features = ["full"] }
