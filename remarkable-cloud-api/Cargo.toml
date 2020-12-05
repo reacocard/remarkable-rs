@@ -1,0 +1,20 @@
+[package]
+name = "remarkable-cloud-api"
+description = "Bindings for the reMarkable cloud API."
+license = "Apache-2.0"
+version = "0.1.0"
+authors = ["Ayla Ounce <ayla@ounce.email>"]
+edition = "2018"
+
+categories = ["api-bindings"]
+keywords = ["ebook", "ereader", "remarkable"]
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+chrono = { version = "0.4", features = ["serde"] }
+reqwest = { version = "0.10", features = ["json"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = { version = "1.0.60" }
+thiserror = { version = "1.0" }
+uuid = { version = "0.8", features = ["serde", "v4"] }
