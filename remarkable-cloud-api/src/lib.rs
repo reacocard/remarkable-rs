@@ -3,30 +3,20 @@ use std::fmt;
 use std::fs;
 use std::io;
 use std::path;
+use std::result;
 
+use derive_more::{Display, Error, From};
 use serde::de::Deserialize;
-use thiserror::Error;
 use uuid::Uuid;
 
-#[derive(Error, Debug)]
-pub enum RemarkableError {
-    #[error("result empty")]
+pub type Result<T> = result::Result<T, Error>;
+
+#[derive(Debug, Display, Error, From)]
+pub enum Error {
     EmptyResult,
-
-    #[error(transparent)]
-    IoError(#[from] io::Error),
-
-    #[error(transparent)]
-    HttpError(#[from] reqwest::Error),
-
-    #[error(transparent)]
-    JsonError(#[from] serde_json::Error),
-}
-
-#[derive(serde::Deserialize, serde::Serialize, Debug)]
-pub struct AuthTokens {
-    device_token: String,
-    user_token: String,
+    IoError { source: io::Error },
+    HttpError { source: reqwest::Error },
+    JsonError { source: serde_json::Error },
 }
 
 #[derive(serde::Deserialize, Debug)]
@@ -55,7 +45,7 @@ pub struct Document {
 }
 
 // Extends UUID parsing by representing empty string as None
-fn deserialize_optional_uuid<'de, D>(deserializer: D) -> Result<Option<Uuid>, D::Error>
+fn deserialize_optional_uuid<'de, D>(deserializer: D) -> result::Result<Option<Uuid>, D::Error>
 where
     D: serde::de::Deserializer<'de>,
 {
@@ -128,7 +118,7 @@ impl Documents {
 }
 
 impl<'de> serde::de::Deserialize<'de> for Documents {
-    fn deserialize<D>(deserializer: D) -> Result<Documents, D::Error>
+    fn deserialize<D>(deserializer: D) -> result::Result<Documents, D::Error>
     where
         D: serde::Deserializer<'de>,
     {
@@ -141,7 +131,7 @@ impl<'de> serde::de::Deserialize<'de> for Documents {
                 formatter.write_str("a JSON sequence")
             }
 
-            fn visit_seq<V>(self, mut visitor: V) -> Result<Self::Value, V::Error>
+            fn visit_seq<V>(self, mut visitor: V) -> result::Result<Self::Value, V::Error>
             where
                 V: serde::de::SeqAccess<'de>,
             {
@@ -163,6 +153,7 @@ impl<'de> serde::de::Deserialize<'de> for Documents {
 pub struct ClientState {
     device_token: String,
     user_token: String,
+    endpoint: String,
 }
 
 impl ClientState {
@@ -170,33 +161,33 @@ impl ClientState {
         Default::default()
     }
 
-    pub fn initialize(&mut self) {
-        todo!();
-    }
-
-    pub fn load<R>(&mut self, f: R) -> Result<(), RemarkableError>
+    pub fn load<R>(&mut self, f: R) -> Result<()>
     where
         R: io::Read,
     {
+        #[allow(clippy::unit_arg)]
         Ok(*self = serde_json::from_reader(f)?)
     }
 
-    pub fn load_from_path(&mut self, p: &path::Path) -> Result<(), RemarkableError> {
+    pub fn load_from_path(&mut self, p: &path::Path) -> Result<()> {
         Ok(self.load(io::BufReader::new(fs::File::open(p)?))?)
     }
 
-    pub fn save<W>(&self, f: W) -> Result<(), RemarkableError>
+    pub fn save<W>(&self, f: W) -> Result<()>
     where
         W: io::Write,
     {
         Ok(serde_json::to_writer_pretty(f, self)?)
     }
 
-    pub fn save_to_path(self, p: &path::Path) -> Result<(), RemarkableError> {
+    pub fn save_to_path(self, p: &path::Path) -> Result<()> {
         // TODO: Make this be properly atomic
         Ok(self.save(io::BufWriter::new(fs::File::create(p)?))?)
     }
 }
+
+const USER_TOKEN_URL: &str = "https://my.remarkable.com/token/json/2/user/new";
+const DOCUMENT_LIST_PATH: &str = "document-storage/json/2/docs";
 
 pub struct Client {
     client_state: ClientState,
@@ -215,11 +206,10 @@ impl Client {
         &mut self.client_state
     }
 
-    pub async fn refresh_token(&mut self) -> Result<(), RemarkableError> {
-        let userurl = "https://my.remarkable.com/token/json/2/user/new";
+    pub async fn refresh_token(&mut self) -> Result<()> {
         let request = self
             .http_client
-            .post(userurl)
+            .post(USER_TOKEN_URL)
             .bearer_auth(&self.client_state.device_token)
             .body("")
             .header(reqwest::header::CONTENT_LENGTH, "0");
@@ -228,13 +218,14 @@ impl Client {
         Ok(())
     }
 
-    pub async fn get_documents(&self) -> Result<Documents, RemarkableError> {
-        let endpoint = "https://document-storage-production-dot-remarkable-production.appspot.com";
-        let list = "document-storage/json/2/docs";
-        let listurl = format!("{}/{}", endpoint, list);
+    fn get_document_list_url(&self) -> String {
+        format!("{}/{}", self.client_state.endpoint, DOCUMENT_LIST_PATH)
+    }
+
+    pub async fn get_documents(&self) -> Result<Documents> {
         let request = self
             .http_client
-            .get(&listurl)
+            .get(&self.get_document_list_url())
             .bearer_auth(&self.client_state.user_token);
         let response = request.send().await?;
         let body = response.text().await?;
@@ -242,13 +233,10 @@ impl Client {
         Ok(docs)
     }
 
-    pub async fn get_document_by_id(&self, id: &Uuid) -> Result<Document, RemarkableError> {
-        let endpoint = "https://document-storage-production-dot-remarkable-production.appspot.com";
-        let list = "document-storage/json/2/docs";
-        let listurl = format!("{}/{}", endpoint, list);
+    pub async fn get_document_by_id(&self, id: &Uuid) -> Result<Document> {
         let request = self
             .http_client
-            .get(&listurl)
+            .get(&self.get_document_list_url())
             .bearer_auth(&self.client_state.user_token)
             .query(&[("withBlob", "1"), ("doc", &id.to_string())]);
         let response = request.send().await?;
@@ -256,7 +244,7 @@ impl Client {
         let mut docs = serde_json::from_str::<Documents>(&body)?;
         match docs.by_id.remove(id) {
             Some(d) => Ok(d),
-            None => Err(RemarkableError::EmptyResult),
+            None => Err(Error::EmptyResult),
         }
     }
 }

@@ -6,9 +6,7 @@ use directories::ProjectDirs;
 use remarkable_cloud_api::*;
 
 fn print_documents(docs: &Documents, path: &Option<&path::Path>, recurse: bool, prefix: &str) {
-    let doc_id = path
-        .and_then(|v| docs.get_by_path(v))
-        .and_then(|v| Some(v.id));
+    let doc_id = path.and_then(|v| docs.get_by_path(v)).map(|v| v.id);
     for doc in docs.get_children(&doc_id) {
         println!("{}{} {}", prefix, doc.visible_name, doc.id);
         if recurse {
@@ -21,7 +19,7 @@ fn print_documents(docs: &Documents, path: &Option<&path::Path>, recurse: bool, 
     }
 }
 
-async fn get_client(state_path: &path::Path) -> Result<Client, RemarkableError> {
+async fn get_client(state_path: &path::Path) -> Result<Client> {
     let mut client = Client::new(
         ClientState::new(),
         reqwest::Client::builder()
@@ -34,7 +32,7 @@ async fn get_client(state_path: &path::Path) -> Result<Client, RemarkableError> 
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let matches = clap::App::new("reMarkable cloud cli")
         .subcommand(
             clap::SubCommand::with_name("ls")
@@ -57,10 +55,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let client_state_path = config_dir.join("client_state.json");
 
-    let client = get_client(&client_state_path).await?;
-
     match matches.subcommand() {
         ("ls", Some(sub_m)) => {
+            let client = get_client(&client_state_path).await?;
             let documents = client.get_documents().await?;
             print_documents(
                 &documents,
@@ -70,6 +67,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
         }
         ("info", Some(sub_m)) => {
+            let client = get_client(&client_state_path).await?;
             let documents = client.get_documents().await?;
             let document =
                 documents.get_by_path(&path::Path::new(sub_m.value_of("filename").unwrap()));
