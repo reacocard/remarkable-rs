@@ -4,10 +4,9 @@ use std::path;
 
 use uuid::Uuid;
 
-use crate::documents::{Documents, Document};
+use crate::documents::{Document, Documents};
 
 use crate::error::{Error, Result};
-
 
 #[derive(serde::Serialize, serde::Deserialize, Default, Debug)]
 pub struct ClientState {
@@ -55,7 +54,10 @@ pub struct Client {
 }
 
 impl Client {
-    pub fn new(client_state: ClientState, http_client: reqwest::Client) -> Self {
+    pub fn new(
+        client_state: ClientState,
+        http_client: reqwest::Client,
+    ) -> Self {
         Client {
             client_state,
             http_client,
@@ -64,6 +66,10 @@ impl Client {
 
     pub fn state(&mut self) -> &mut ClientState {
         &mut self.client_state
+    }
+
+    pub fn http(&self) -> &reqwest::Client {
+        &self.http_client
     }
 
     pub async fn refresh_token(&mut self) -> Result<()> {

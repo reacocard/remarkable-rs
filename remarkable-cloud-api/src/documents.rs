@@ -6,7 +6,6 @@ use std::result;
 use serde::de::Deserialize;
 use uuid::Uuid;
 
-
 #[derive(serde::Deserialize, Debug)]
 pub struct Document {
     // The serde renames are to map rust-style names to the JSON api.
@@ -33,7 +32,9 @@ pub struct Document {
 }
 
 // Extends UUID parsing by representing empty string as None
-fn deserialize_optional_uuid<'de, D>(deserializer: D) -> result::Result<Option<Uuid>, D::Error>
+fn deserialize_optional_uuid<'de, D>(
+    deserializer: D,
+) -> result::Result<Option<Uuid>, D::Error>
 where
     D: serde::de::Deserializer<'de>,
 {
@@ -80,14 +81,16 @@ impl Documents {
             {
                 match path.parent().zip(d.parent) {
                     None => return Some(d),
-                    Some((parent_path, parent_id)) => match self.get_by_path(parent_path) {
-                        None => continue,
-                        Some(parent) => {
-                            if parent.id == parent_id {
-                                return Some(d);
+                    Some((parent_path, parent_id)) => {
+                        match self.get_by_path(parent_path) {
+                            None => continue,
+                            Some(parent) => {
+                                if parent.id == parent_id {
+                                    return Some(d);
+                                }
                             }
                         }
-                    },
+                    }
                 }
             }
         }
@@ -123,7 +126,10 @@ impl<'de> serde::de::Deserialize<'de> for Documents {
                 formatter.write_str("a JSON sequence")
             }
 
-            fn visit_seq<V>(self, mut visitor: V) -> result::Result<Self::Value, V::Error>
+            fn visit_seq<V>(
+                self,
+                mut visitor: V,
+            ) -> result::Result<Self::Value, V::Error>
             where
                 V: serde::de::SeqAccess<'de>,
             {

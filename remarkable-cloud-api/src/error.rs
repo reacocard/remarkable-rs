@@ -3,7 +3,6 @@ use std::result;
 
 use derive_more::{Display, Error, From};
 
-
 pub type Result<T> = result::Result<T, Error>;
 
 #[derive(Debug, Display, Error, From)]
