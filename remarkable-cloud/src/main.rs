@@ -44,23 +44,21 @@ fn print_documents(
 fn paths_from_arg<'a>(
     matches: &'a clap::ArgMatches,
     arg_name: &str,
-) -> Vec<&'a Path> {
-    match matches.values_of(arg_name) {
-        Some(i) => i.map(Path::new).collect(),
-        None => vec![],
-    }
+) -> Box<dyn Iterator<Item = &'a Path> + 'a> {
+    paths_from_arg_or(matches, arg_name, None)
 }
 
 fn paths_from_arg_or<'a>(
     matches: &'a clap::ArgMatches,
     arg_name: &str,
-    default: Option<&'a str>,
-) -> Vec<&'a Path> {
+    default: Option<&'a Path>,
+) -> Box<dyn Iterator<Item = &'a Path> + 'a> {
     match matches.values_of(arg_name) {
-        Some(i) => i.map(Path::new).collect(),
-        None => {
-            default.map_or_else(|| vec![Path::new("/")], |d| vec![Path::new(d)])
-        }
+        Some(i) => Box::new(i.map(Path::new)),
+        None => match default {
+            Some(d) => Box::new(std::iter::once(d)),
+            None => Box::new(std::iter::empty()),
+        },
     }
 }
 
@@ -130,7 +128,8 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         ("ls", Some(sub_m)) => {
             let client = get_client(&client_state_path).await?;
             let documents = client.get_documents().await?;
-            for path in paths_from_arg_or(sub_m, "paths", None) {
+            for path in paths_from_arg_or(sub_m, "paths", Some(Path::new("/")))
+            {
                 print_documents(
                     &documents,
                     &Some(&path),
