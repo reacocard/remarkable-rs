@@ -2,6 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use directories::ProjectDirs;
+use zip::ZipArchive;
 
 use remarkable_cloud_api::*;
 
@@ -39,6 +40,17 @@ fn print_documents(
             );
         }
     }
+}
+
+fn add_ext_to_path(path: &Path, ext: &str) -> PathBuf {
+    let mut buf = path.to_path_buf();
+    let mut newext = path.extension().unwrap_or_default().to_os_string();
+    if newext.len() > 0 {
+        newext.push(".");
+    }
+    newext.push(ext);
+    buf.set_extension(newext);
+    buf
 }
 
 fn paths_from_arg<'a>(
@@ -152,7 +164,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             let client = get_client(&client_state_path).await?;
             let documents = client.get_documents().await?;
             for filepath in paths_from_arg(sub_m, "filenames") {
-                match documents.get_by_path(&filepath) {
+                let docbytes = match documents.get_by_path(&filepath) {
                     None => {
                         println!("Couldn't find document '{:?}'", filepath);
                         continue;
@@ -162,15 +174,46 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
                             client.get_document_by_id(&doc.id).await?;
                         //println!("{:?}", blobdoc);
                         // TODO: add progress indicator
-                        fs::write(
-                            filepath,
-                            client
-                                .http()
-                                .get(&blobdoc.blob_url_get)
-                                .send()
-                                .await?
-                                .bytes()
-                                .await?,
+                        client
+                            .http()
+                            .get(&blobdoc.blob_url_get)
+                            .send()
+                            .await?
+                            .bytes()
+                            .await?
+                    }
+                };
+                match sub_m.is_present("raw-zip") {
+                    true => {
+                        let fp = add_ext_to_path(filepath, "zip");
+                        fs::write(fp, docbytes)?;
+                    }
+                    false => {
+                        let mut za =
+                            ZipArchive::new(std::io::Cursor::new(docbytes))?;
+                        let f = match za.file_names().find(|i| {
+                            i.ends_with(".pdf") || i.ends_with(".epub")
+                        }) {
+                            Some(f) => f,
+                            None => {
+                                println!(
+                                    "No file found in response for {:?}",
+                                    filepath
+                                );
+                                continue;
+                            }
+                        }
+                        .to_string();
+                        let ext = Path::new(&f)
+                            .extension()
+                            .unwrap_or_default()
+                            .to_string_lossy();
+                        let fp = add_ext_to_path(filepath, &ext);
+                        println!("DEBUG: {:?}", fp);
+                        // TODO: Handle overwriting
+                        std::io::copy(
+                            &mut za.by_name(&f)?,
+                            &mut fs::File::create(fp)?,
                         )?;
                     }
                 }
