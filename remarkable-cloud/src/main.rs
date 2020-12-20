@@ -186,7 +186,10 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
                 match sub_m.is_present("raw-zip") {
                     true => {
                         let fp = add_ext_to_path(filepath, "zip");
-                        fs::write(fp, docbytes)?;
+                        match fp.file_name() {
+                            Some(fpn) => fs::write(fpn, docbytes)?,
+                            None => println!("No filename found in path {:?}", fp),
+                        }
                     }
                     false => {
                         let mut za =
