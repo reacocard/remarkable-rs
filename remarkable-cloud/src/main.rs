@@ -194,9 +194,13 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
                     false => {
                         let mut za =
                             ZipArchive::new(std::io::Cursor::new(docbytes))?;
-                        let f = match za.file_names().find(|i| {
-                            i.ends_with(".pdf") || i.ends_with(".epub")
-                        }) {
+                        let opt_f = za
+                            .file_names()
+                            .find(|i| i.ends_with(".epub"))
+                            .or_else(|| {
+                                za.file_names().find(|i| i.ends_with(".pdf"))
+                            });
+                        let f = match opt_f {
                             Some(f) => f,
                             None => {
                                 println!(
