@@ -188,7 +188,9 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
                         let fp = add_ext_to_path(filepath, "zip");
                         match fp.file_name() {
                             Some(fpn) => fs::write(fpn, docbytes)?,
-                            None => println!("No filename found in path {:?}", fp),
+                            None => {
+                                println!("No filename found in path {:?}", fp)
+                            }
                         }
                     }
                     false => {
@@ -219,11 +221,15 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
                         println!("DEBUG: {:?}", fp);
                         // TODO: Handle overwriting
                         match fp.file_name() {
-                            Some(fpn) => { std::io::copy(
-                                &mut za.by_name(&f)?,
-                                &mut fs::File::create(fpn)?,
-                            )?; },
-                            None => println!("No filename found in path {:?}", fp),
+                            Some(fpn) => {
+                                std::io::copy(
+                                    &mut za.by_name(&f)?,
+                                    &mut fs::File::create(fpn)?,
+                                )?;
+                            }
+                            None => {
+                                println!("No filename found in path {:?}", fp)
+                            }
                         }
                     }
                 }
