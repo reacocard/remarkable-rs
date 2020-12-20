@@ -211,10 +211,13 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
                         let fp = add_ext_to_path(filepath, &ext);
                         println!("DEBUG: {:?}", fp);
                         // TODO: Handle overwriting
-                        std::io::copy(
-                            &mut za.by_name(&f)?,
-                            &mut fs::File::create(fp)?,
-                        )?;
+                        match fp.file_name() {
+                            Some(fpn) => { std::io::copy(
+                                &mut za.by_name(&f)?,
+                                &mut fs::File::create(fpn)?,
+                            )?; },
+                            None => println!("No filename found in path {:?}", fp),
+                        }
                     }
                 }
             }
