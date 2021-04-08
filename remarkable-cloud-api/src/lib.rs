@@ -1,8 +1,10 @@
+pub use reqwest;
+
 mod client;
 pub use crate::client::{Client, ClientState};
 
 mod documents;
-pub use crate::documents::{Document, Documents};
+pub use crate::documents::{Document, Documents, Uuid};
 
 mod error;
 pub use crate::error::{Error, Result};

@@ -4,9 +4,9 @@ use std::path;
 use std::result;
 
 use serde::de::Deserialize;
-use uuid::Uuid;
+pub use uuid::Uuid;
 
-#[derive(serde::Deserialize, Debug)]
+#[derive(Debug, serde::Deserialize)]
 pub struct Document {
     // The serde renames are to map rust-style names to the JSON api.
     #[serde(rename = "ID")]
@@ -49,7 +49,7 @@ where
     }
 }
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct Documents {
     by_id: HashMap<Uuid, Document>,
 }

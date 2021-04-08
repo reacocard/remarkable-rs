@@ -10,9 +10,9 @@ use crate::error::{Error, Result};
 
 #[derive(serde::Serialize, serde::Deserialize, Default, Debug)]
 pub struct ClientState {
-    device_token: String,
-    user_token: String,
-    endpoint: String,
+    pub device_token: String,
+    pub user_token: String,
+    pub endpoint: String,
 }
 
 impl ClientState {
@@ -49,6 +49,7 @@ const USER_TOKEN_URL: &str = "https://my.remarkable.com/token/json/2/user/new";
 const QUERY_STORAGE_URL: &str = "https://service-manager-production-dot-remarkable-production.appspot.com/service/json/1/document-storage?environment=production&group=auth0|5a68dc51cb30df3877a1d7c4&apiVer=2";
 const DOCUMENT_LIST_PATH: &str = "document-storage/json/2/docs";
 
+#[derive(Debug)]
 pub struct Client {
     client_state: ClientState,
     http_client: reqwest::Client,
