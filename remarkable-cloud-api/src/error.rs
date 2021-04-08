@@ -7,6 +7,7 @@ pub type Result<T> = result::Result<T, Error>;
 
 #[derive(Debug, Display, Error, From)]
 pub enum Error {
+    RmCloudError,
     EmptyResult,
     IoError { source: io::Error },
     HttpError { source: reqwest::Error },
