@@ -6,6 +6,13 @@ use std::result;
 use serde::de::Deserialize;
 pub use uuid::Uuid;
 
+#[derive(Debug, PartialEq, Eq)]
+pub enum Parent {
+    Trash,
+    Root,
+    Node(Uuid),
+}
+
 #[derive(Debug, serde::Deserialize)]
 pub struct Document {
     // The serde renames are to map rust-style names to the JSON api.
@@ -13,8 +20,8 @@ pub struct Document {
     pub id: Uuid,
     #[serde(rename = "VissibleName")]
     pub visible_name: String,
-    #[serde(rename = "Parent", deserialize_with = "deserialize_optional_uuid")]
-    pub parent: Option<Uuid>,
+    #[serde(rename = "Parent", deserialize_with = "deserialize_parent")]
+    pub parent: Parent,
     #[serde(rename = "Type")]
     pub doc_type: String,
     #[serde(rename = "CurrentPage")]
@@ -32,20 +39,20 @@ pub struct Document {
 }
 
 // Extends UUID parsing by representing empty string as None
-fn deserialize_optional_uuid<'de, D>(
+fn deserialize_parent<'de, D>(
     deserializer: D,
-) -> result::Result<Option<Uuid>, D::Error>
+) -> result::Result<Parent, D::Error>
 where
     D: serde::de::Deserializer<'de>,
 {
     let buf = String::deserialize(deserializer)?;
 
-    if buf == "" {
-        Ok(None)
-    } else {
-        Uuid::parse_str(&buf)
-            .map(Some)
-            .map_err(serde::de::Error::custom)
+    match buf.as_ref() {
+        "" => Ok(Parent::Root),
+        "trash" => Ok(Parent::Trash),
+        uuid => Uuid::parse_str(uuid)
+            .map(Parent::Node)
+            .map_err(serde::de::Error::custom),
     }
 }
 
@@ -72,14 +79,18 @@ impl Documents {
         // documents and m is the number of path components. Since we have O(1)
         // lookup by id this should be doable in O(n).
         for d in self.by_id.values() {
-            if d.visible_name
-                == path
-                    .file_name()
-                    .unwrap_or_default()
-                    .to_str()
-                    .unwrap_or_default()
-            {
-                match path.parent().zip(d.parent) {
+            let path_file_name = path
+                .file_name()
+                .unwrap_or_default()
+                .to_str()
+                .unwrap_or_default();
+
+            if d.visible_name == path_file_name {
+                let d_parent = match d.parent {
+                    Parent::Node(p) => Some(p),
+                    _ => None,
+                };
+                match path.parent().zip(d_parent) {
                     None => return Some(d),
                     Some((parent_path, parent_id)) => {
                         match self.get_by_path(parent_path) {
@@ -97,10 +108,10 @@ impl Documents {
         None
     }
 
-    pub fn get_children(&self, uuid: &Option<Uuid>) -> Vec<&Document> {
+    pub fn get_children(&self, parent: &Parent) -> Vec<&Document> {
         let mut acc: Vec<&Document> = vec![];
         for d in self.by_id.values() {
-            if d.parent == *uuid {
+            if &d.parent == parent {
                 acc.push(&d);
             }
         }
