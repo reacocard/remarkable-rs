@@ -70,6 +70,10 @@ impl Documents {
         self.len() == 0
     }
 
+    pub fn iter(&self) -> impl Iterator<Item = &Document> {
+        self.by_id.values()
+    }
+
     pub fn get(&self, uuid: &Uuid) -> Option<&Document> {
         self.by_id.get(uuid)
     }

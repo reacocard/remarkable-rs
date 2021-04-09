@@ -3,6 +3,7 @@ use std::io;
 use std::path;
 
 use uuid::Uuid;
+use zip::ZipArchive;
 
 use crate::documents::{Document, Documents};
 
@@ -133,7 +134,19 @@ impl Client {
         Ok(docs)
     }
 
-    pub async fn get_document_by_id(&self, id: &Uuid) -> Result<Document> {
+    pub async fn download_zip(
+        &self,
+        id: Uuid,
+    ) -> Result<ZipArchive<io::Cursor<bytes::Bytes>>> {
+        let doc = self.get_document_by_id(id).await?;
+        let response = self.http_client.get(doc.blob_url_get).send().await?;
+        let bytes = response.bytes().await?;
+        let seekable_bytes = io::Cursor::new(bytes); // ZipArchive wants something that is 'Seek'
+        let zip = ZipArchive::new(seekable_bytes)?;
+        Ok(zip)
+    }
+
+    pub async fn get_document_by_id(&self, id: Uuid) -> Result<Document> {
         let request = self
             .http_client
             .get(&self.get_document_list_url())
@@ -142,7 +155,7 @@ impl Client {
         let response = request.send().await?;
         let body = response.text().await?;
         let mut docs = serde_json::from_str::<Documents>(&body)?;
-        match docs.remove(id) {
+        match docs.remove(&id) {
             Some(d) => Ok(d),
             None => Err(Error::EmptyResult),
         }
