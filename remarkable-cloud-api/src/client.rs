@@ -3,6 +3,7 @@ use std::io;
 use std::path;
 
 use uuid::Uuid;
+use zip::ZipArchive;
 
 use crate::documents::{Document, Documents};
 
@@ -10,9 +11,9 @@ use crate::error::{Error, Result};
 
 #[derive(serde::Serialize, serde::Deserialize, Default, Debug)]
 pub struct ClientState {
-    device_token: String,
-    user_token: String,
-    endpoint: String,
+    pub device_token: String,
+    pub user_token: String,
+    pub endpoint: String,
 }
 
 impl ClientState {
@@ -46,8 +47,10 @@ impl ClientState {
 }
 
 const USER_TOKEN_URL: &str = "https://my.remarkable.com/token/json/2/user/new";
+const QUERY_STORAGE_URL: &str = "https://service-manager-production-dot-remarkable-production.appspot.com/service/json/1/document-storage?environment=production&group=auth0|5a68dc51cb30df3877a1d7c4&apiVer=2";
 const DOCUMENT_LIST_PATH: &str = "document-storage/json/2/docs";
 
+#[derive(Debug)]
 pub struct Client {
     client_state: ClientState,
     http_client: reqwest::Client,
@@ -72,6 +75,12 @@ impl Client {
         &self.http_client
     }
 
+    pub async fn refresh_state(&mut self) -> Result<()> {
+        self.refresh_token().await?;
+        self.refresh_storage_endpoint().await?;
+        Ok(())
+    }
+
     pub async fn refresh_token(&mut self) -> Result<()> {
         let request = self
             .http_client
@@ -84,22 +93,60 @@ impl Client {
         Ok(())
     }
 
+    pub async fn refresh_storage_endpoint(&mut self) -> Result<()> {
+        #[derive(Debug, serde::Deserialize)]
+        struct StorageHost {
+            #[serde(rename = "Status")]
+            status: String,
+            #[serde(rename = "Host")]
+            host: String,
+        }
+
+        let response = self.http_client.get(QUERY_STORAGE_URL).send().await?;
+        let storage_host: StorageHost =
+            serde_json::from_str(&response.text().await?)?;
+
+        if &storage_host.status != "OK" {
+            eprintln!("Bad response from rM {:?}", storage_host);
+            return Err(Error::RmCloudError);
+        }
+        self.client_state.endpoint = format!("https://{}", storage_host.host);
+        Ok(())
+    }
+
     fn get_document_list_url(&self) -> String {
         format!("{}/{}", self.client_state.endpoint, DOCUMENT_LIST_PATH)
     }
 
-    pub async fn get_documents(&self) -> Result<Documents> {
-        let request = self
+    pub async fn all_documents(&self, with_blob: bool) -> Result<Documents> {
+        let mut request = self
             .http_client
             .get(&self.get_document_list_url())
             .bearer_auth(&self.client_state.user_token);
+
+        if with_blob {
+            request = request.query(&[("withBlob", "1")])
+        }
+
         let response = request.send().await?;
         let body = response.text().await?;
         let docs = serde_json::from_str::<Documents>(&body)?;
         Ok(docs)
     }
 
-    pub async fn get_document_by_id(&self, id: &Uuid) -> Result<Document> {
+    pub async fn download_zip(
+        &self,
+        id: Uuid,
+    ) -> Result<ZipArchive<io::Cursor<bytes::Bytes>>> {
+        let doc = self.get_document_by_id(id).await?;
+        let response = self.http_client.get(doc.blob_url_get).send().await?;
+        let bytes = response.bytes().await?;
+        let seekable_bytes = io::Cursor::new(bytes); // ZipArchive wants something that is 'Seek'
+        let zip = ZipArchive::new(seekable_bytes)?;
+        Ok(zip)
+    }
+
+    pub async fn get_document_by_id(&self, id: Uuid) -> Result<Document> {
         let request = self
             .http_client
             .get(&self.get_document_list_url())
@@ -108,7 +155,7 @@ impl Client {
         let response = request.send().await?;
         let body = response.text().await?;
         let mut docs = serde_json::from_str::<Documents>(&body)?;
-        match docs.remove(id) {
+        match docs.remove(&id) {
             Some(d) => Ok(d),
             None => Err(Error::EmptyResult),
         }
