@@ -117,11 +117,16 @@ impl Client {
         format!("{}/{}", self.client_state.endpoint, DOCUMENT_LIST_PATH)
     }
 
-    pub async fn get_documents(&self) -> Result<Documents> {
-        let request = self
+    pub async fn all_documents(&self, with_blob: bool) -> Result<Documents> {
+        let mut request = self
             .http_client
             .get(&self.get_document_list_url())
             .bearer_auth(&self.client_state.user_token);
+
+        if with_blob {
+            request = request.query(&[("withBlob", "1")])
+        }
+
         let response = request.send().await?;
         let body = response.text().await?;
         let docs = serde_json::from_str::<Documents>(&body)?;

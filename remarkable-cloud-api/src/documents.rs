@@ -6,7 +6,7 @@ use std::result;
 use serde::de::Deserialize;
 pub use uuid::Uuid;
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum Parent {
     Trash,
     Root,
@@ -108,10 +108,10 @@ impl Documents {
         None
     }
 
-    pub fn get_children(&self, parent: &Parent) -> Vec<&Document> {
+    pub fn children(&self, parent: Parent) -> Vec<&Document> {
         let mut acc: Vec<&Document> = vec![];
         for d in self.by_id.values() {
-            if &d.parent == parent {
+            if d.parent == parent {
                 acc.push(&d);
             }
         }
