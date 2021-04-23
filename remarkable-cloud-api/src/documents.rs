@@ -45,7 +45,62 @@ impl Parent {
     }
 }
 
-#[derive(Debug, serde::Deserialize, serde::Serialize)]
+#[derive(Debug, serde::Serialize)]
+pub struct UploadDocument {
+    #[serde(rename = "ID")]
+    pub id: Uuid,
+    #[serde(rename = "Parent", serialize_with = "Parent::serialize_rm_parent")]
+    pub parent: Parent,
+    #[serde(rename = "VissibleName")]
+    pub visible_name: String,
+    #[serde(rename = "Type")]
+    pub doc_type: String,
+    #[serde(rename = "Version")]
+    pub version: u32,
+    #[serde(rename = "ModifiedClient")]
+    pub modified_client: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct UploadRequest {
+    #[serde(rename = "ID")]
+    pub id: Uuid,
+    #[serde(rename = "Type")]
+    pub doc_type: String,
+    #[serde(rename = "Version")]
+    pub version: u32,
+}
+
+impl UploadDocument {
+    pub fn new(visible_name: String, parent: Parent, doc_type: String) -> Self {
+        Self {
+            id: Uuid::new_v4(),
+            parent,
+            visible_name,
+            doc_type,
+            version: 1,
+            modified_client: chrono::Utc::now(),
+        }
+    }
+
+    pub fn new_folder(visible_name: String, parent: Parent) -> Self {
+        Self::new(visible_name, parent, "CollectionType".to_string())
+    }
+
+    pub fn new_document(visible_name: String, parent: Parent) -> Self {
+        Self::new(visible_name, parent, "DocumentType".to_string())
+    }
+
+    pub fn upload_request(&self) -> UploadRequest {
+        UploadRequest {
+            id: self.id,
+            doc_type: self.doc_type.clone(),
+            version: self.version,
+        }
+    }
+}
+
+#[derive(Debug, serde::Deserialize)]
 pub struct Document {
     // The serde renames are to map rust-style names to the JSON api.
     #[serde(rename = "ID")]
@@ -54,8 +109,7 @@ pub struct Document {
     pub visible_name: String,
     #[serde(
         rename = "Parent",
-        deserialize_with = "Parent::deserialize_rm_parent",
-        serialize_with = "Parent::serialize_rm_parent"
+        deserialize_with = "Parent::deserialize_rm_parent"
     )]
     pub parent: Parent,
     #[serde(rename = "Type")]

@@ -5,7 +5,7 @@ use std::path;
 use uuid::Uuid;
 use zip::ZipArchive;
 
-use crate::documents::{Document, Documents, Parent};
+use crate::documents::{Document, Documents, Parent, UploadDocument};
 
 use crate::error::{Error, Result};
 
@@ -49,9 +49,8 @@ impl ClientState {
 const USER_TOKEN_URL: &str = "https://my.remarkable.com/token/json/2/user/new";
 const QUERY_STORAGE_URL: &str = "https://service-manager-production-dot-remarkable-production.appspot.com/service/json/1/document-storage?environment=production&group=auth0|5a68dc51cb30df3877a1d7c4&apiVer=2";
 const DOCUMENT_LIST_PATH: &str = "document-storage/json/2/docs";
-const UPLOAD_PATH: &str = "/document-storage/json/2/upload/request";
-const UPDATE_STATUS_PATH: &str =
-    "/document-storage/json/2/upload/update-status";
+const UPLOAD_PATH: &str = "document-storage/json/2/upload/request";
+const UPDATE_STATUS_PATH: &str = "document-storage/json/2/upload/update-status";
 
 #[derive(Debug)]
 pub struct Client {
@@ -191,30 +190,20 @@ impl Client {
     pub async fn create_folder(
         &self,
         visible_name: String,
-        id: Uuid,
         parent: Parent,
     ) -> Result<Uuid> {
-        let zip_content = Self::prepare_empty_zip_content(id)?;
-        let url = self.upload_url();
+        println!("Creating folder {} {:?}", visible_name, parent);
 
-        #[derive(Debug, serde::Serialize)]
-        struct UploadRequest {
-            #[serde(rename = "ID")]
-            id: Uuid,
-            #[serde(rename = "Type")]
-            doc_type: String,
-            #[serde(rename = "Version")]
-            version: u32,
-        }
+        println!("Sending upload_request {:?}", upload_req);
+
+        let mut folder_doc = UploadDocument::new_folder(visible_name, parent);
+        let upload_req = &[folder_doc.upload_request()];
 
         let raw_upload_req_response = self
             .http_client
-            .put(url)
-            .json(&[UploadRequest {
-                id,
-                doc_type: "CollectionType".to_string(),
-                version: 1,
-            }])
+            .put(self.upload_url())
+            .bearer_auth(&self.client_state.user_token)
+            .json(upload_req)
             .send()
             .await?;
 
@@ -236,32 +225,39 @@ impl Client {
             blob_url_put_expires: String,
         }
 
-        let mut upload_request_responses: Vec<UploadRequestResponse> =
+        let mut upload_req_responses: Vec<UploadRequestResponse> =
             serde_json::from_str(&raw_upload_req_response.text().await?)?;
 
-        println!("Response from rM {:?}", upload_request_responses);
-        if upload_request_responses.len() != 1 {
-            eprintln!(
-                "Expecte a singel response for our upload request, got {:?}",
-                upload_request_responses
-            );
-        }
+        println!("Response from rM {:?}", upload_req_responses);
+        let upload_req_response = match upload_req_responses.pop() {
+            Some(response) => response,
+            None => {
+                eprintln!(
+                    "Did not receive a valid upload request response from rM Cloud {:?}",
+                    upload_req_responses
+                );
+                return Err(Error::RmCloudError);
+            }
+        };
 
-        let upload_request_response = upload_request_responses.pop().unwrap();
-
-        if !upload_request_response.success {
+        if !upload_req_response.success {
             eprintln!(
                 "Bad response from rM when creating upload request {:?}",
-                upload_request_response
+                upload_req_response
             );
             return Err(Error::RmCloudError);
         }
 
+        // Update the our folder id, just in case rM wants us to use a different ID from the one we requested
+        folder_doc.id = upload_req_response.id;
+        let zip_content = Self::prepare_empty_zip_content(folder_doc.id)?;
+
         let raw_upload_response = self
             .http_client
-            .put(upload_request_response.blob_url_put)
-            .body(zip_content)
+            .put(upload_req_response.blob_url_put)
+            .bearer_auth(&self.client_state.user_token)
             .header("Content-Type", "")
+            .body(zip_content)
             .send()
             .await?;
 
@@ -272,22 +268,11 @@ impl Client {
             );
             return Err(Error::RmCloudError);
         }
-        let folder_doc = Document {
-            id,
-            visible_name,
-            parent,
-            doc_type: "CollectionType".into(),
-            current_page: 0,
-            message: "Success".into(),
-            modified_client: chrono::Utc::now(),
-            blob_url_get: "".into(),
-            blob_url_get_expires: chrono::Utc::now(),
-            bookmarked: false,
-        };
 
         let raw_update_status_response = self
             .http_client
             .put(self.update_status_url())
+            .bearer_auth(&self.client_state.user_token)
             .json(&[folder_doc])
             .send()
             .await?;
@@ -314,7 +299,12 @@ impl Client {
         }
         let update_status = update_status_responses.pop().unwrap();
         println!("Got update status {:?}", update_status);
-        Ok(update_status.id)
+        if !update_status.success {
+            eprintln!("Failed to update status of folder {:?}", update_status);
+            Err(Error::RmCloudError)
+        } else {
+            Ok(update_status.id)
+        }
     }
 }
 
