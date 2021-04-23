@@ -278,7 +278,7 @@ impl Client {
 
         if raw_upload_resp.status() != 200 {
             eprintln!(
-                "Bad response from rM when upload folder {:?}",
+                "Bad response from rM when uploading folder {:?}",
                 raw_upload_resp
             );
             return Err(Error::RmCloudError);
@@ -301,14 +301,16 @@ impl Client {
         let mut update_status_responses: Vec<UpdateStatusResponse> =
             serde_json::from_str(&raw_update_status_response.text().await?)?;
 
-        if update_status_responses.len() != 1 {
+        let update_status = if let Some(resp) = update_status_responses.pop() {
+            resp
+        } else {
             eprintln!(
-                "Expecte a singel response for our update_status request, got {:?}",
+                "Didn't get a valid response to our update_status, got {:?}",
                 update_status_responses
             );
-        }
-        let update_status = update_status_responses.pop().unwrap();
-        println!("Got update status {:?}", update_status);
+            return Err(Error::RmCloudError);
+        };
+
         if !update_status.success {
             eprintln!("Failed to update status of folder {:?}", update_status);
             Err(Error::RmCloudError)
