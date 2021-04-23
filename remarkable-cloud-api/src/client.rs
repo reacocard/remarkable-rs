@@ -206,8 +206,6 @@ impl Client {
     where
         R: io::Read + io::Seek,
     {
-        use io::Write;
-
         let current_id = Self::id_from_zip(zip)?;
         let mut new_zip = zip::ZipWriter::new(io::Cursor::new(Vec::new()));
 
@@ -216,7 +214,7 @@ impl Client {
             let new_name = file
                 .name()
                 .replace(&current_id.to_string(), &new_id.to_string());
-            new_zip.raw_copy_file_rename(file, new_name);
+            new_zip.raw_copy_file_rename(file, new_name)?;
         }
 
         let archive_bytes = new_zip.finish()?.into_inner();
