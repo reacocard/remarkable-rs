@@ -262,21 +262,11 @@ impl Client {
         Ok(upload_req_response)
     }
 
-    pub async fn upload_zip<R>(
+    async fn upload_zip(
         &self,
-        id: Uuid,
-        visible_name: String,
-        parent: Parent,
-        zip: &mut zip::ZipArchive<R>,
-    ) -> Result<Uuid>
-    where
-        R: io::Read + io::Seek,
-    {
-        let upload_req = UploadRequest::new_notebook(id);
-        let upload_req_resp = self.request_upload_url(&upload_req).await?;
-
-        let zip_content = Self::replace_id_in_zip(upload_req_resp.id, zip)?;
-
+        upload_req_resp: &UploadRequestResponse,
+        zip_content: Vec<u8>,
+    ) -> Result<()> {
         let raw_upload_resp = self
             .http_client
             .put(&upload_req_resp.blob_url_put)
@@ -293,6 +283,24 @@ impl Client {
             );
             return Err(Error::RmCloudError);
         }
+        Ok(())
+    }
+
+    pub async fn upload_notebook<R>(
+        &self,
+        id: Uuid,
+        visible_name: String,
+        parent: Parent,
+        zip: &mut zip::ZipArchive<R>,
+    ) -> Result<Uuid>
+    where
+        R: io::Read + io::Seek,
+    {
+        let upload_req = UploadRequest::new_notebook(id);
+        let upload_req_resp = self.request_upload_url(&upload_req).await?;
+
+        let zip_content = Self::replace_id_in_zip(upload_req_resp.id, zip)?;
+        self.upload_zip(&upload_req_resp, zip_content).await?;
 
         let upload_doc = UploadDocument::new(
             upload_req,
@@ -351,22 +359,7 @@ impl Client {
         let upload_req_resp = self.request_upload_url(&upload_req).await?;
 
         let zip_content = Self::prepare_empty_zip_content(upload_req_resp.id)?;
-        let raw_upload_resp = self
-            .http_client
-            .put(&upload_req_resp.blob_url_put)
-            .bearer_auth(&self.client_state.user_token)
-            .header("Content-Type", "")
-            .body(zip_content)
-            .send()
-            .await?;
-
-        if raw_upload_resp.status() != 200 {
-            eprintln!(
-                "Bad response from rM when upload folder {:?}",
-                raw_upload_resp
-            );
-            return Err(Error::RmCloudError);
-        }
+        self.upload_zip(&upload_req_resp, zip_content).await?;
 
         let upload_doc = UploadDocument::new(
             upload_req,
