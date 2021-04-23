@@ -72,9 +72,14 @@ pub struct UploadRequest {
 }
 
 impl UploadDocument {
-    pub fn new(visible_name: String, parent: Parent, doc_type: String) -> Self {
+    pub fn new(
+        id: Uuid,
+        visible_name: String,
+        parent: Parent,
+        doc_type: String,
+    ) -> Self {
         Self {
-            id: Uuid::new_v4(),
+            id,
             parent,
             visible_name,
             doc_type,
@@ -83,12 +88,16 @@ impl UploadDocument {
         }
     }
 
-    pub fn new_folder(visible_name: String, parent: Parent) -> Self {
-        Self::new(visible_name, parent, "CollectionType".to_string())
+    pub fn new_folder(id: Uuid, visible_name: String, parent: Parent) -> Self {
+        Self::new(id, visible_name, parent, "CollectionType".to_string())
     }
 
-    pub fn new_document(visible_name: String, parent: Parent) -> Self {
-        Self::new(visible_name, parent, "DocumentType".to_string())
+    pub fn new_notebook(
+        id: Uuid,
+        visible_name: String,
+        parent: Parent,
+    ) -> Self {
+        Self::new(id, visible_name, parent, "DocumentType".to_string())
     }
 
     pub fn upload_request(&self) -> UploadRequest {

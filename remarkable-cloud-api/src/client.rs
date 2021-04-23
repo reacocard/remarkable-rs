@@ -3,9 +3,10 @@ use std::io;
 use std::path;
 
 use uuid::Uuid;
-use zip::ZipArchive;
 
-use crate::documents::{Document, Documents, Parent, UploadDocument};
+use crate::documents::{
+    Document, Documents, Parent, UploadDocument, UploadRequest,
+};
 
 use crate::error::{Error, Result};
 
@@ -147,12 +148,12 @@ impl Client {
     pub async fn download_zip(
         &self,
         id: Uuid,
-    ) -> Result<ZipArchive<io::Cursor<bytes::Bytes>>> {
+    ) -> Result<zip::ZipArchive<io::Cursor<bytes::Bytes>>> {
         let doc = self.get_document_by_id(id).await?;
         let response = self.http_client.get(doc.blob_url_get).send().await?;
         let bytes = response.bytes().await?;
         let seekable_bytes = io::Cursor::new(bytes); // ZipArchive wants something that is 'Seek'
-        let zip = ZipArchive::new(seekable_bytes)?;
+        let zip = zip::ZipArchive::new(seekable_bytes)?;
         Ok(zip)
     }
 
@@ -172,32 +173,191 @@ impl Client {
     }
 
     fn prepare_empty_zip_content(id: Uuid) -> Result<Vec<u8>> {
-        use std::io::Write;
+        use io::Write;
 
-        let buf = Vec::new();
-        let w = std::io::Cursor::new(buf);
-        let mut zip = zip::ZipWriter::new(w);
-
-        let options = zip::write::FileOptions::default();
-        zip.start_file(format!("{}.content", id), options)?;
+        let mut zip = zip::ZipWriter::new(io::Cursor::new(Vec::new()));
+        zip.start_file(format!("{}.content", id), Default::default())?;
         zip.write(b"{}")?;
+        let archive_bytes = zip.finish()?.into_inner();
+        Ok(archive_bytes)
+    }
 
-        // Optionally finish the zip. (this is also done on drop)
-        let writer = zip.finish()?;
-        Ok(writer.into_inner())
+    fn id_from_zip<R>(zip: &mut zip::ZipArchive<R>) -> Result<Uuid>
+    where
+        R: io::Read + io::Seek,
+    {
+        for i in 0..zip.len() {
+            let file = zip.by_index(i)?;
+            if file.name().ends_with(".content") {
+                // file name has pattern <uuid>.content, we just want the uuid.
+                let uuid_str = file.name().trim_end_matches(".content");
+                let uuid = Uuid::parse_str(uuid_str)?;
+                return Ok(uuid);
+            }
+        }
+
+        Err(Error::InvalidZip)
+    }
+
+    fn replace_id_in_zip<R>(
+        new_id: Uuid,
+        zip: &mut zip::ZipArchive<R>,
+    ) -> Result<Vec<u8>>
+    where
+        R: io::Read + io::Seek,
+    {
+        use io::Write;
+
+        let current_id = Self::id_from_zip(zip)?;
+        let mut new_zip = zip::ZipWriter::new(io::Cursor::new(Vec::new()));
+
+        for i in 0..zip.len() {
+            let file = zip.by_index(i)?;
+            let new_name = file
+                .name()
+                .replace(&current_id.to_string(), &new_id.to_string());
+            new_zip.raw_copy_file_rename(file, new_name);
+        }
+
+        let archive_bytes = new_zip.finish()?.into_inner();
+        Ok(archive_bytes)
+    }
+
+    pub async fn upload_zip<R>(
+        &self,
+        id: Uuid,
+        visible_name: String,
+        parent: Parent,
+        zip: &mut zip::ZipArchive<R>,
+    ) -> Result<Uuid>
+    where
+        R: io::Read + io::Seek,
+    {
+        let mut upload_doc =
+            UploadDocument::new_notebook(id, visible_name, parent);
+        let upload_req = &[upload_doc.upload_request()];
+        println!("Sending upload_request {:?}", upload_req);
+
+        let raw_upload_req_response = self
+            .http_client
+            .put(self.upload_url())
+            .bearer_auth(&self.client_state.user_token)
+            .json(upload_req)
+            .send()
+            .await?;
+
+        println!("Received upload req response {:?}", raw_upload_req_response);
+
+        #[derive(Debug, serde::Deserialize)]
+        struct UploadRequestResponse {
+            #[serde(rename = "ID")]
+            id: Uuid,
+            #[serde(rename = "Version")]
+            version: u32,
+            #[serde(rename = "Message")]
+            message: String,
+            #[serde(rename = "Success")]
+            success: bool,
+            #[serde(rename = "BlobURLPut")]
+            blob_url_put: String,
+            #[serde(rename = "BlobURLPutExpires")]
+            blob_url_put_expires: String,
+        }
+
+        let mut upload_req_responses: Vec<UploadRequestResponse> =
+            serde_json::from_str(&raw_upload_req_response.text().await?)?;
+
+        println!("Response from rM {:?}", upload_req_responses);
+        let upload_req_response = match upload_req_responses.pop() {
+            Some(response) => response,
+            None => {
+                eprintln!(
+                    "Did not receive a valid upload request response from rM Cloud {:?}",
+                    upload_req_responses
+                );
+                return Err(Error::RmCloudError);
+            }
+        };
+
+        if !upload_req_response.success {
+            eprintln!(
+                "Bad response from rM when creating upload request {:?}",
+                upload_req_response
+            );
+            return Err(Error::RmCloudError);
+        }
+
+        // Update the our folder id, just in case rM wants us to use a different ID from the one we requested
+        upload_doc.id = upload_req_response.id;
+        let zip_content = Self::replace_id_in_zip(id, zip)?;
+
+        let raw_upload_response = self
+            .http_client
+            .put(upload_req_response.blob_url_put)
+            .bearer_auth(&self.client_state.user_token)
+            .header("Content-Type", "")
+            .body(zip_content)
+            .send()
+            .await?;
+
+        if raw_upload_response.status() != 200 {
+            eprintln!(
+                "Bad response from rM when upload folder {:?}",
+                raw_upload_response
+            );
+            return Err(Error::RmCloudError);
+        }
+
+        let raw_update_status_response = self
+            .http_client
+            .put(self.update_status_url())
+            .bearer_auth(&self.client_state.user_token)
+            .json(&[upload_doc])
+            .send()
+            .await?;
+
+        #[derive(Debug, serde::Deserialize)]
+        struct UpdateStatusResponse {
+            #[serde(rename = "ID")]
+            id: Uuid,
+            #[serde(rename = "Version")]
+            version: u32,
+            #[serde(rename = "Message")]
+            message: String,
+            #[serde(rename = "Success")]
+            success: bool,
+        }
+        let mut update_status_responses: Vec<UpdateStatusResponse> =
+            serde_json::from_str(&raw_update_status_response.text().await?)?;
+
+        if update_status_responses.len() != 1 {
+            eprintln!(
+                "Expecte a singel response for our update_status request, got {:?}",
+                update_status_responses
+            );
+        }
+        let update_status = update_status_responses.pop().unwrap();
+        println!("Got update status {:?}", update_status);
+        if !update_status.success {
+            eprintln!("Failed to update status of folder {:?}", update_status);
+            Err(Error::RmCloudError)
+        } else {
+            Ok(update_status.id)
+        }
     }
 
     pub async fn create_folder(
         &self,
+        id: Uuid,
         visible_name: String,
         parent: Parent,
     ) -> Result<Uuid> {
         println!("Creating folder {} {:?}", visible_name, parent);
 
-        println!("Sending upload_request {:?}", upload_req);
-
-        let mut folder_doc = UploadDocument::new_folder(visible_name, parent);
+        let mut folder_doc =
+            UploadDocument::new_folder(id, visible_name, parent);
         let upload_req = &[folder_doc.upload_request()];
+        println!("Sending upload_request {:?}", upload_req);
 
         let raw_upload_req_response = self
             .http_client
