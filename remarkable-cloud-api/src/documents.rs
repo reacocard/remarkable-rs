@@ -46,22 +46,6 @@ impl Parent {
 }
 
 #[derive(Debug, serde::Serialize)]
-pub struct UploadDocument {
-    #[serde(rename = "ID")]
-    pub id: Uuid,
-    #[serde(rename = "Parent", serialize_with = "Parent::serialize_rm_parent")]
-    pub parent: Parent,
-    #[serde(rename = "VissibleName")]
-    pub visible_name: String,
-    #[serde(rename = "Type")]
-    pub doc_type: String,
-    #[serde(rename = "Version")]
-    pub version: u32,
-    #[serde(rename = "ModifiedClient")]
-    pub modified_client: chrono::DateTime<chrono::Utc>,
-}
-
-#[derive(Debug, serde::Serialize)]
 pub struct UploadRequest {
     #[serde(rename = "ID")]
     pub id: Uuid,
@@ -105,8 +89,24 @@ pub struct UploadRequestResponse {
     pub blob_url_put_expires: String,
 }
 
-impl UploadDocument {
-    pub fn new(
+#[derive(Debug, serde::Serialize)]
+pub struct UpdateStatusRequest {
+    #[serde(rename = "ID")]
+    pub id: Uuid,
+    #[serde(rename = "Parent", serialize_with = "Parent::serialize_rm_parent")]
+    pub parent: Parent,
+    #[serde(rename = "VissibleName")]
+    pub visible_name: String,
+    #[serde(rename = "Type")]
+    pub doc_type: String,
+    #[serde(rename = "Version")]
+    pub version: u32,
+    #[serde(rename = "ModifiedClient")]
+    pub modified_client: chrono::DateTime<chrono::Utc>,
+}
+
+impl UpdateStatusRequest {
+    pub fn after_upload(
         upload_request: UploadRequest,
         upload_request_response: UploadRequestResponse,
         visible_name: String,
@@ -121,6 +121,18 @@ impl UploadDocument {
             modified_client: chrono::Utc::now(),
         }
     }
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct UpdateStatusResponse {
+    #[serde(rename = "ID")]
+    pub id: Uuid,
+    #[serde(rename = "Version")]
+    pub version: u32,
+    #[serde(rename = "Message")]
+    pub message: String,
+    #[serde(rename = "Success")]
+    pub success: bool,
 }
 
 #[derive(Debug, serde::Deserialize)]

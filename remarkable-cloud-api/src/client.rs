@@ -5,8 +5,8 @@ use std::path;
 use uuid::Uuid;
 
 use crate::documents::{
-    Document, Documents, Parent, UploadDocument, UploadRequest,
-    UploadRequestResponse,
+    Document, Documents, Parent, UpdateStatusRequest, UpdateStatusResponse,
+    UploadRequest, UploadRequestResponse,
 };
 
 use crate::error::{Error, Result};
@@ -286,6 +286,37 @@ impl Client {
         Ok(())
     }
 
+    async fn update_status(
+        &self,
+        request: UpdateStatusRequest,
+    ) -> Result<UpdateStatusResponse> {
+        let raw_update_status_response = self
+            .http_client
+            .put(self.update_status_url())
+            .bearer_auth(&self.client_state.user_token)
+            .json(&[request])
+            .send()
+            .await?;
+
+        let mut update_status_responses: Vec<UpdateStatusResponse> =
+            serde_json::from_str(&raw_update_status_response.text().await?)?;
+
+        if update_status_responses.len() != 1 {
+            eprintln!(
+                "Expecte a singel response for our update_status request, got {:?}",
+                update_status_responses
+            );
+        }
+        let update_status = update_status_responses.pop().unwrap();
+        println!("Got update status {:?}", update_status);
+        if !update_status.success {
+            eprintln!("Failed to update status of folder {:?}", update_status);
+            Err(Error::RmCloudError)
+        } else {
+            Ok(update_status)
+        }
+    }
+
     pub async fn upload_notebook<R>(
         &self,
         id: Uuid,
@@ -302,49 +333,15 @@ impl Client {
         let zip_content = Self::replace_id_in_zip(upload_req_resp.id, zip)?;
         self.upload_zip(&upload_req_resp, zip_content).await?;
 
-        let upload_doc = UploadDocument::new(
+        let update_status_req = UpdateStatusRequest::after_upload(
             upload_req,
             upload_req_resp,
             visible_name,
             parent,
         );
 
-        let raw_update_status_response = self
-            .http_client
-            .put(self.update_status_url())
-            .bearer_auth(&self.client_state.user_token)
-            .json(&[upload_doc])
-            .send()
-            .await?;
-
-        #[derive(Debug, serde::Deserialize)]
-        struct UpdateStatusResponse {
-            #[serde(rename = "ID")]
-            id: Uuid,
-            #[serde(rename = "Version")]
-            version: u32,
-            #[serde(rename = "Message")]
-            message: String,
-            #[serde(rename = "Success")]
-            success: bool,
-        }
-        let mut update_status_responses: Vec<UpdateStatusResponse> =
-            serde_json::from_str(&raw_update_status_response.text().await?)?;
-
-        if update_status_responses.len() != 1 {
-            eprintln!(
-                "Expecte a singel response for our update_status request, got {:?}",
-                update_status_responses
-            );
-        }
-        let update_status = update_status_responses.pop().unwrap();
-        println!("Got update status {:?}", update_status);
-        if !update_status.success {
-            eprintln!("Failed to update status of folder {:?}", update_status);
-            Err(Error::RmCloudError)
-        } else {
-            Ok(update_status.id)
-        }
+        let update_status_resp = self.update_status(update_status_req).await?;
+        Ok(update_status_resp.id)
     }
 
     pub async fn create_folder(
@@ -361,49 +358,15 @@ impl Client {
         let zip_content = Self::prepare_empty_zip_content(upload_req_resp.id)?;
         self.upload_zip(&upload_req_resp, zip_content).await?;
 
-        let upload_doc = UploadDocument::new(
+        let update_status_req = UpdateStatusRequest::after_upload(
             upload_req,
             upload_req_resp,
             visible_name,
             parent,
         );
 
-        let raw_update_status_response = self
-            .http_client
-            .put(self.update_status_url())
-            .bearer_auth(&self.client_state.user_token)
-            .json(&[upload_doc])
-            .send()
-            .await?;
-
-        #[derive(Debug, serde::Deserialize)]
-        struct UpdateStatusResponse {
-            #[serde(rename = "ID")]
-            id: Uuid,
-            #[serde(rename = "Version")]
-            version: u32,
-            #[serde(rename = "Message")]
-            message: String,
-            #[serde(rename = "Success")]
-            success: bool,
-        }
-        let mut update_status_responses: Vec<UpdateStatusResponse> =
-            serde_json::from_str(&raw_update_status_response.text().await?)?;
-
-        if update_status_responses.len() != 1 {
-            eprintln!(
-                "Expecte a singel response for our update_status request, got {:?}",
-                update_status_responses
-            );
-        }
-        let update_status = update_status_responses.pop().unwrap();
-        println!("Got update status {:?}", update_status);
-        if !update_status.success {
-            eprintln!("Failed to update status of folder {:?}", update_status);
-            Err(Error::RmCloudError)
-        } else {
-            Ok(update_status.id)
-        }
+        let update_status_resp = self.update_status(update_status_req).await?;
+        Ok(update_status_resp.id)
     }
 }
 
