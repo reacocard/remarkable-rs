@@ -8,19 +8,55 @@ pub use uuid::Uuid;
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum Parent {
-    Trash,
     Root,
+    Trash,
     Node(Uuid),
 }
 
-#[derive(Debug, serde::Deserialize)]
+impl Parent {
+    fn to_rm_string(&self) -> String {
+        match self {
+            Self::Root => "".to_string(),
+            Self::Trash => "trash".to_string(),
+            Self::Node(id) => format!("{}", id),
+        }
+    }
+
+    fn serialize_rm_parent<S>(&self, se: S) -> result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        se.serialize_str(&self.to_rm_string())
+    }
+
+    fn deserialize_rm_parent<'de, D>(de: D) -> result::Result<Self, D::Error>
+    where
+        D: serde::de::Deserializer<'de>,
+    {
+        let buf = String::deserialize(de)?;
+
+        match buf.as_ref() {
+            "" => Ok(Self::Root),
+            "trash" => Ok(Self::Trash),
+            uuid => Uuid::parse_str(uuid)
+                .map(Self::Node)
+                .map_err(serde::de::Error::custom),
+        }
+    }
+}
+
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
 pub struct Document {
     // The serde renames are to map rust-style names to the JSON api.
     #[serde(rename = "ID")]
     pub id: Uuid,
     #[serde(rename = "VissibleName")]
     pub visible_name: String,
-    #[serde(rename = "Parent", deserialize_with = "deserialize_parent")]
+    #[serde(
+        rename = "Parent",
+        deserialize_with = "Parent::deserialize_rm_parent",
+        serialize_with = "Parent::serialize_rm_parent"
+    )]
     pub parent: Parent,
     #[serde(rename = "Type")]
     pub doc_type: String,
@@ -36,24 +72,6 @@ pub struct Document {
     pub blob_url_get: String,
     #[serde(rename = "BlobURLGetExpires")]
     pub blob_url_get_expires: chrono::DateTime<chrono::Utc>,
-}
-
-// Extends UUID parsing by representing empty string as None
-fn deserialize_parent<'de, D>(
-    deserializer: D,
-) -> result::Result<Parent, D::Error>
-where
-    D: serde::de::Deserializer<'de>,
-{
-    let buf = String::deserialize(deserializer)?;
-
-    match buf.as_ref() {
-        "" => Ok(Parent::Root),
-        "trash" => Ok(Parent::Trash),
-        uuid => Uuid::parse_str(uuid)
-            .map(Parent::Node)
-            .map_err(serde::de::Error::custom),
-    }
 }
 
 #[derive(Debug, Default)]

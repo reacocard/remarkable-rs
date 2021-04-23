@@ -5,7 +5,7 @@ use std::path;
 use uuid::Uuid;
 use zip::ZipArchive;
 
-use crate::documents::{Document, Documents};
+use crate::documents::{Document, Documents, Parent};
 
 use crate::error::{Error, Result};
 
@@ -49,6 +49,9 @@ impl ClientState {
 const USER_TOKEN_URL: &str = "https://my.remarkable.com/token/json/2/user/new";
 const QUERY_STORAGE_URL: &str = "https://service-manager-production-dot-remarkable-production.appspot.com/service/json/1/document-storage?environment=production&group=auth0|5a68dc51cb30df3877a1d7c4&apiVer=2";
 const DOCUMENT_LIST_PATH: &str = "document-storage/json/2/docs";
+const UPLOAD_PATH: &str = "/document-storage/json/2/upload/request";
+const UPDATE_STATUS_PATH: &str =
+    "/document-storage/json/2/upload/update-status";
 
 #[derive(Debug)]
 pub struct Client {
@@ -114,14 +117,22 @@ impl Client {
         Ok(())
     }
 
-    fn get_document_list_url(&self) -> String {
+    fn document_list_url(&self) -> String {
         format!("{}/{}", self.client_state.endpoint, DOCUMENT_LIST_PATH)
+    }
+
+    fn upload_url(&self) -> String {
+        format!("{}/{}", self.client_state.endpoint, UPLOAD_PATH)
+    }
+
+    fn update_status_url(&self) -> String {
+        format!("{}/{}", self.client_state.endpoint, UPDATE_STATUS_PATH)
     }
 
     pub async fn all_documents(&self, with_blob: bool) -> Result<Documents> {
         let mut request = self
             .http_client
-            .get(&self.get_document_list_url())
+            .get(&self.document_list_url())
             .bearer_auth(&self.client_state.user_token);
 
         if with_blob {
@@ -149,7 +160,7 @@ impl Client {
     pub async fn get_document_by_id(&self, id: Uuid) -> Result<Document> {
         let request = self
             .http_client
-            .get(&self.get_document_list_url())
+            .get(&self.document_list_url())
             .bearer_auth(&self.client_state.user_token)
             .query(&[("withBlob", "1"), ("doc", &id.to_string())]);
         let response = request.send().await?;
@@ -159,6 +170,151 @@ impl Client {
             Some(d) => Ok(d),
             None => Err(Error::EmptyResult),
         }
+    }
+
+    fn prepare_empty_zip_content(id: Uuid) -> Result<Vec<u8>> {
+        use std::io::Write;
+
+        let buf = Vec::new();
+        let w = std::io::Cursor::new(buf);
+        let mut zip = zip::ZipWriter::new(w);
+
+        let options = zip::write::FileOptions::default();
+        zip.start_file(format!("{}.content", id), options)?;
+        zip.write(b"{}")?;
+
+        // Optionally finish the zip. (this is also done on drop)
+        let writer = zip.finish()?;
+        Ok(writer.into_inner())
+    }
+
+    pub async fn create_folder(
+        &self,
+        visible_name: String,
+        id: Uuid,
+        parent: Parent,
+    ) -> Result<Uuid> {
+        let zip_content = Self::prepare_empty_zip_content(id)?;
+        let url = self.upload_url();
+
+        #[derive(Debug, serde::Serialize)]
+        struct UploadRequest {
+            #[serde(rename = "ID")]
+            id: Uuid,
+            #[serde(rename = "Type")]
+            doc_type: String,
+            #[serde(rename = "Version")]
+            version: u32,
+        }
+
+        let raw_upload_req_response = self
+            .http_client
+            .put(url)
+            .json(&[UploadRequest {
+                id,
+                doc_type: "CollectionType".to_string(),
+                version: 1,
+            }])
+            .send()
+            .await?;
+
+        println!("Received upload req response {:?}", raw_upload_req_response);
+
+        #[derive(Debug, serde::Deserialize)]
+        struct UploadRequestResponse {
+            #[serde(rename = "ID")]
+            id: Uuid,
+            #[serde(rename = "Version")]
+            version: u32,
+            #[serde(rename = "Message")]
+            message: String,
+            #[serde(rename = "Success")]
+            success: bool,
+            #[serde(rename = "BlobURLPut")]
+            blob_url_put: String,
+            #[serde(rename = "BlobURLPutExpires")]
+            blob_url_put_expires: String,
+        }
+
+        let mut upload_request_responses: Vec<UploadRequestResponse> =
+            serde_json::from_str(&raw_upload_req_response.text().await?)?;
+
+        println!("Response from rM {:?}", upload_request_responses);
+        if upload_request_responses.len() != 1 {
+            eprintln!(
+                "Expecte a singel response for our upload request, got {:?}",
+                upload_request_responses
+            );
+        }
+
+        let upload_request_response = upload_request_responses.pop().unwrap();
+
+        if !upload_request_response.success {
+            eprintln!(
+                "Bad response from rM when creating upload request {:?}",
+                upload_request_response
+            );
+            return Err(Error::RmCloudError);
+        }
+
+        let raw_upload_response = self
+            .http_client
+            .put(upload_request_response.blob_url_put)
+            .body(zip_content)
+            .header("Content-Type", "")
+            .send()
+            .await?;
+
+        if raw_upload_response.status() != 200 {
+            eprintln!(
+                "Bad response from rM when upload folder {:?}",
+                raw_upload_response
+            );
+            return Err(Error::RmCloudError);
+        }
+        let folder_doc = Document {
+            id,
+            visible_name,
+            parent,
+            doc_type: "CollectionType".into(),
+            current_page: 0,
+            message: "Success".into(),
+            modified_client: chrono::Utc::now(),
+            blob_url_get: "".into(),
+            blob_url_get_expires: chrono::Utc::now(),
+            bookmarked: false,
+        };
+
+        let raw_update_status_response = self
+            .http_client
+            .put(self.update_status_url())
+            .json(&[folder_doc])
+            .send()
+            .await?;
+
+        #[derive(Debug, serde::Deserialize)]
+        struct UpdateStatusResponse {
+            #[serde(rename = "ID")]
+            id: Uuid,
+            #[serde(rename = "Version")]
+            version: u32,
+            #[serde(rename = "Message")]
+            message: String,
+            #[serde(rename = "Success")]
+            success: bool,
+        }
+        let mut update_status_responses: Vec<UpdateStatusResponse> =
+            serde_json::from_str(&raw_update_status_response.text().await?)?;
+
+        if update_status_responses.len() != 1 {
+            eprintln!(
+                "Expecte a singel response for our update_status request, got {:?}",
+                update_status_responses
+            );
+        }
+        let update_status = update_status_responses.pop().unwrap();
+        println!("Got update status {:?}", update_status);
+        Ok(update_status.id)
     }
 }
 
