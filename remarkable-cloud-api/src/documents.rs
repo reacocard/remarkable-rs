@@ -71,40 +71,54 @@ pub struct UploadRequest {
     pub version: u32,
 }
 
-impl UploadDocument {
-    pub fn new(
-        id: Uuid,
-        visible_name: String,
-        parent: Parent,
-        doc_type: String,
-    ) -> Self {
+impl UploadRequest {
+    pub fn new_notebook(id: Uuid) -> Self {
         Self {
             id,
-            parent,
-            visible_name,
-            doc_type,
+            doc_type: "DocumentType".into(),
             version: 1,
-            modified_client: chrono::Utc::now(),
         }
     }
 
-    pub fn new_folder(id: Uuid, visible_name: String, parent: Parent) -> Self {
-        Self::new(id, visible_name, parent, "CollectionType".to_string())
+    pub fn new_folder(id: Uuid) -> Self {
+        Self {
+            id,
+            doc_type: "CollectionType".into(),
+            version: 1,
+        }
     }
+}
 
-    pub fn new_notebook(
-        id: Uuid,
+#[derive(Debug, serde::Deserialize)]
+pub struct UploadRequestResponse {
+    #[serde(rename = "ID")]
+    pub id: Uuid,
+    #[serde(rename = "Version")]
+    pub version: u32,
+    #[serde(rename = "Message")]
+    pub message: String,
+    #[serde(rename = "Success")]
+    pub success: bool,
+    #[serde(rename = "BlobURLPut")]
+    pub blob_url_put: String,
+    #[serde(rename = "BlobURLPutExpires")]
+    pub blob_url_put_expires: String,
+}
+
+impl UploadDocument {
+    pub fn new(
+        upload_request: UploadRequest,
+        upload_request_response: UploadRequestResponse,
         visible_name: String,
         parent: Parent,
     ) -> Self {
-        Self::new(id, visible_name, parent, "DocumentType".to_string())
-    }
-
-    pub fn upload_request(&self) -> UploadRequest {
-        UploadRequest {
-            id: self.id,
-            doc_type: self.doc_type.clone(),
-            version: self.version,
+        Self {
+            id: upload_request_response.id,
+            parent,
+            visible_name,
+            doc_type: upload_request.doc_type,
+            version: upload_request_response.version,
+            modified_client: chrono::Utc::now(),
         }
     }
 }

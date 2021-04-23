@@ -6,6 +6,7 @@ use uuid::Uuid;
 
 use crate::documents::{
     Document, Documents, Parent, UploadDocument, UploadRequest,
+    UploadRequestResponse,
 };
 
 use crate::error::{Error, Result};
@@ -221,46 +222,19 @@ impl Client {
         Ok(archive_bytes)
     }
 
-    pub async fn upload_zip<R>(
+    async fn request_upload_url(
         &self,
-        id: Uuid,
-        visible_name: String,
-        parent: Parent,
-        zip: &mut zip::ZipArchive<R>,
-    ) -> Result<Uuid>
-    where
-        R: io::Read + io::Seek,
-    {
-        let mut upload_doc =
-            UploadDocument::new_notebook(id, visible_name, parent);
-        let upload_req = &[upload_doc.upload_request()];
-        println!("Sending upload_request {:?}", upload_req);
-
+        request: &UploadRequest,
+    ) -> Result<UploadRequestResponse> {
         let raw_upload_req_response = self
             .http_client
             .put(self.upload_url())
             .bearer_auth(&self.client_state.user_token)
-            .json(upload_req)
+            .json(&[request])
             .send()
             .await?;
 
         println!("Received upload req response {:?}", raw_upload_req_response);
-
-        #[derive(Debug, serde::Deserialize)]
-        struct UploadRequestResponse {
-            #[serde(rename = "ID")]
-            id: Uuid,
-            #[serde(rename = "Version")]
-            version: u32,
-            #[serde(rename = "Message")]
-            message: String,
-            #[serde(rename = "Success")]
-            success: bool,
-            #[serde(rename = "BlobURLPut")]
-            blob_url_put: String,
-            #[serde(rename = "BlobURLPutExpires")]
-            blob_url_put_expires: String,
-        }
 
         let mut upload_req_responses: Vec<UploadRequestResponse> =
             serde_json::from_str(&raw_upload_req_response.text().await?)?;
@@ -285,26 +259,47 @@ impl Client {
             return Err(Error::RmCloudError);
         }
 
-        // Update the our folder id, just in case rM wants us to use a different ID from the one we requested
-        upload_doc.id = upload_req_response.id;
-        let zip_content = Self::replace_id_in_zip(id, zip)?;
+        Ok(upload_req_response)
+    }
 
-        let raw_upload_response = self
+    pub async fn upload_zip<R>(
+        &self,
+        id: Uuid,
+        visible_name: String,
+        parent: Parent,
+        zip: &mut zip::ZipArchive<R>,
+    ) -> Result<Uuid>
+    where
+        R: io::Read + io::Seek,
+    {
+        let upload_req = UploadRequest::new_notebook(id);
+        let upload_req_resp = self.request_upload_url(&upload_req).await?;
+
+        let zip_content = Self::replace_id_in_zip(upload_req_resp.id, zip)?;
+
+        let raw_upload_resp = self
             .http_client
-            .put(upload_req_response.blob_url_put)
+            .put(&upload_req_resp.blob_url_put)
             .bearer_auth(&self.client_state.user_token)
             .header("Content-Type", "")
             .body(zip_content)
             .send()
             .await?;
 
-        if raw_upload_response.status() != 200 {
+        if raw_upload_resp.status() != 200 {
             eprintln!(
                 "Bad response from rM when upload folder {:?}",
-                raw_upload_response
+                raw_upload_resp
             );
             return Err(Error::RmCloudError);
         }
+
+        let upload_doc = UploadDocument::new(
+            upload_req,
+            upload_req_resp,
+            visible_name,
+            parent,
+        );
 
         let raw_update_status_response = self
             .http_client
@@ -352,86 +347,39 @@ impl Client {
     ) -> Result<Uuid> {
         println!("Creating folder {} {:?}", visible_name, parent);
 
-        let mut folder_doc =
-            UploadDocument::new_folder(id, visible_name, parent);
-        let upload_req = &[folder_doc.upload_request()];
-        println!("Sending upload_request {:?}", upload_req);
+        let upload_req = UploadRequest::new_folder(id);
+        let upload_req_resp = self.request_upload_url(&upload_req).await?;
 
-        let raw_upload_req_response = self
+        let zip_content = Self::prepare_empty_zip_content(upload_req_resp.id)?;
+        let raw_upload_resp = self
             .http_client
-            .put(self.upload_url())
-            .bearer_auth(&self.client_state.user_token)
-            .json(upload_req)
-            .send()
-            .await?;
-
-        println!("Received upload req response {:?}", raw_upload_req_response);
-
-        #[derive(Debug, serde::Deserialize)]
-        struct UploadRequestResponse {
-            #[serde(rename = "ID")]
-            id: Uuid,
-            #[serde(rename = "Version")]
-            version: u32,
-            #[serde(rename = "Message")]
-            message: String,
-            #[serde(rename = "Success")]
-            success: bool,
-            #[serde(rename = "BlobURLPut")]
-            blob_url_put: String,
-            #[serde(rename = "BlobURLPutExpires")]
-            blob_url_put_expires: String,
-        }
-
-        let mut upload_req_responses: Vec<UploadRequestResponse> =
-            serde_json::from_str(&raw_upload_req_response.text().await?)?;
-
-        println!("Response from rM {:?}", upload_req_responses);
-        let upload_req_response = match upload_req_responses.pop() {
-            Some(response) => response,
-            None => {
-                eprintln!(
-                    "Did not receive a valid upload request response from rM Cloud {:?}",
-                    upload_req_responses
-                );
-                return Err(Error::RmCloudError);
-            }
-        };
-
-        if !upload_req_response.success {
-            eprintln!(
-                "Bad response from rM when creating upload request {:?}",
-                upload_req_response
-            );
-            return Err(Error::RmCloudError);
-        }
-
-        // Update the our folder id, just in case rM wants us to use a different ID from the one we requested
-        folder_doc.id = upload_req_response.id;
-        let zip_content = Self::prepare_empty_zip_content(folder_doc.id)?;
-
-        let raw_upload_response = self
-            .http_client
-            .put(upload_req_response.blob_url_put)
+            .put(&upload_req_resp.blob_url_put)
             .bearer_auth(&self.client_state.user_token)
             .header("Content-Type", "")
             .body(zip_content)
             .send()
             .await?;
 
-        if raw_upload_response.status() != 200 {
+        if raw_upload_resp.status() != 200 {
             eprintln!(
                 "Bad response from rM when upload folder {:?}",
-                raw_upload_response
+                raw_upload_resp
             );
             return Err(Error::RmCloudError);
         }
+
+        let upload_doc = UploadDocument::new(
+            upload_req,
+            upload_req_resp,
+            visible_name,
+            parent,
+        );
 
         let raw_update_status_response = self
             .http_client
             .put(self.update_status_url())
             .bearer_auth(&self.client_state.user_token)
-            .json(&[folder_doc])
+            .json(&[upload_doc])
             .send()
             .await?;
 
